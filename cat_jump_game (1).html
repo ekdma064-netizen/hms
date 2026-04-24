@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>냥이의 점프!</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #87CEEB; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+  #gameWrapper { position: relative; }
+  canvas { display: block; border-radius: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.18); }
+  #overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: rgba(255,255,255,0.82); border-radius: 16px; }
+  #overlay h1 { font-size: 2rem; color: #f5a623; margin-bottom: 8px; }
+  #overlay p { font-size: 1rem; color: #555; margin-bottom: 4px; }
+  #overlay .score-big { font-size: 2rem; font-weight: 700; color: #e67e22; margin: 8px 0 16px; }
+  #overlay button { background: #f5a623; color: #fff; border: none; border-radius: 30px; padding: 12px 38px; font-size: 1.1rem; cursor: pointer; font-weight: 700; }
+  #overlay button:hover { background: #e09010; }
+</style>
+</head>
+<body>
+<div id="gameWrapper">
+  <canvas id="c" width="520" height="300"></canvas>
+  <div id="overlay" id="overlay">
+    <h1>🐱 냥이의 점프!</h1>
+    <p>장애물을 피해 점프하세요!</p>
+    <p style="font-size:0.88rem;color:#aaa;margin-bottom:14px;">스페이스 / 클릭 / 터치 = 점프</p>
+    <button onclick="startGame()">시작하기 ▶</button>
+  </div>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const overlay = document.getElementById('overlay');
+const W = canvas.width, H = canvas.height;
+const GROUND = H - 55;
+const CAT_X = 70, CAT_W = 40, CAT_H = 40;
+
+let cat, obstacles, score, speed, frame, raf, running, spawnTimer;
+
+const OB_TYPES = [
+  { w: 22, h: 44, color: '#388E3C', top: '#2E7D32' },
+  { w: 30, h: 30, color: '#F57C00', top: '#E65100' },
+  { w: 18, h: 54, color: '#7B1FA2', top: '#6A1B9A' },
+  { w: 40, h: 24, color: '#C62828', top: '#B71C1C' },
+];
+
+// --- clouds ---
+const cloudData = [
+  {bx:60, y:40, r:26}, {bx:210, y:28, r:20}, {bx:370, y:48, r:30}, {bx:490, y:32, r:18}
+];
+
+function drawBg() {
+  // sky
+  const g = ctx.createLinearGradient(0,0,0,H);
+  g.addColorStop(0,'#87CEEB'); g.addColorStop(1,'#cce8ff');
+  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+  // clouds
+  ctx.fillStyle = 'rgba(255,255,255,0.88)';
+  cloudData.forEach(c => {
+    const x = ((c.bx - frame*0.4) % (W+80) + W+80) % (W+80) - 40;
+    ctx.beginPath();
+    ctx.arc(x, c.y, c.r, 0, Math.PI*2);
+    ctx.arc(x+c.r*0.8, c.y-c.r*0.3, c.r*0.65, 0, Math.PI*2);
+    ctx.arc(x-c.r*0.65, c.y-c.r*0.1, c.r*0.55, 0, Math.PI*2);
+    ctx.fill();
+  });
+  // ground
+  ctx.fillStyle = '#5DBB63'; ctx.fillRect(0, GROUND, W, H-GROUND);
+  ctx.fillStyle = '#43A047'; ctx.fillRect(0, GROUND, W, 5);
+  // ground dashes
+  ctx.fillStyle = '#81C784';
+  for (let i=0; i<W+30; i+=32) {
+    const x = ((i - frame*speed) % (W+32) + W+32) % (W+32);
+    ctx.fillRect(x, GROUND+3, 18, 2);
+  }
+}
+
+function drawCat(x, y, airborne) {
+  const cx = x + CAT_W/2, cy = y + CAT_H/2;
+  const s = CAT_H;
+
+  // body
+  ctx.fillStyle = '#FDD835';
+  ctx.beginPath(); ctx.ellipse(cx, cy+4, s*0.44, s*0.3, 0, 0, Math.PI*2); ctx.fill();
+
+  // head
+  ctx.fillStyle = '#FDD835';
+  ctx.beginPath(); ctx.arc(cx, cy-s*0.18, s*0.32, 0, Math.PI*2); ctx.fill();
+
+  // ears
+  ctx.fillStyle = '#F9A825';
+  [[cx-10, cx-17, cx-3], [cx+10, cx+17, cx+3]].forEach(([bx,tx,rx]) => {
+    ctx.beginPath();
+    ctx.moveTo(bx, cy-s*0.38); ctx.lineTo(tx, cy-s*0.6); ctx.lineTo(rx, cy-s*0.48); ctx.fill();
+  });
+  ctx.fillStyle = '#FFB3BA';
+  [[cx-10, cx-15, cx-4], [cx+10, cx+15, cx+4]].forEach(([bx,tx,rx]) => {
+    ctx.beginPath();
+    ctx.moveTo(bx, cy-s*0.41); ctx.lineTo(tx, cy-s*0.56); ctx.lineTo(rx, cy-s*0.5); ctx.fill();
+  });
+
+  // eyes
+  ctx.fillStyle = '#333';
+  ctx.beginPath(); ctx.arc(cx-7, cy-s*0.22, 3, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+7, cy-s*0.22, 3, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(cx-6, cy-s*0.25, 1, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx+8, cy-s*0.25, 1, 0, Math.PI*2); ctx.fill();
+
+  // nose
+  ctx.fillStyle = '#FF8A80';
+  ctx.beginPath(); ctx.arc(cx, cy-s*0.1, 2.5, 0, Math.PI*2); ctx.fill();
+
+  // whiskers
+  ctx.strokeStyle = '#bbb'; ctx.lineWidth = 1;
+  [[-5,-22,-10,-22,-5,-6,-22,-2],[5,22,10,22,5,-6,22,-2]].forEach(([x1,x2,x3,x4,x5,y1,x6,y2],i) => {
+    if(i===0){
+      ctx.beginPath(); ctx.moveTo(cx-5, cy-s*0.1); ctx.lineTo(cx-22, cy-s*0.14); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx-5, cy-s*0.05); ctx.lineTo(cx-22, cy-0); ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.moveTo(cx+5, cy-s*0.1); ctx.lineTo(cx+22, cy-s*0.14); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(cx+5, cy-s*0.05); ctx.lineTo(cx+22, cy-0); ctx.stroke();
+    }
+  });
+
+  // tail
+  ctx.strokeStyle = '#F9A825'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+  ctx.beginPath();
+  if (airborne) {
+    ctx.moveTo(cx+s*0.36, cy+4); ctx.quadraticCurveTo(cx+s*0.75, cy-10, cx+s*0.55, cy-22);
+  } else {
+    const w = Math.sin(frame*0.18)*4;
+    ctx.moveTo(cx+s*0.36, cy+6); ctx.quadraticCurveTo(cx+s*0.8+w, cy+20, cx+s*0.5+w, cy+28);
+  }
+  ctx.stroke();
+
+  // legs
+  ctx.fillStyle = '#F9A825';
+  if (airborne) {
+    ctx.beginPath(); ctx.ellipse(cx-12, cy+13, 7, 5, -0.5, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cx+4,  cy+13, 7, 5,  0.5, 0, Math.PI*2); ctx.fill();
+  } else {
+    const la = Math.sin(frame*0.25)*3;
+    ctx.beginPath(); ctx.ellipse(cx-12, cy+15+la, 6, 8, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cx+4,  cy+15-la, 6, 8, 0, 0, Math.PI*2); ctx.fill();
+  }
+}
+
+function drawObstacle(ob) {
+  const t = ob.t;
+  ctx.fillStyle = t.color;
+  ctx.fillRect(ob.x, GROUND - t.h, t.w, t.h);
+  ctx.fillStyle = t.top;
+  ctx.fillRect(ob.x - 3, GROUND - t.h - 6, t.w + 6, 10);
+  ctx.beginPath();
+  ctx.arc(ob.x + t.w/2, GROUND - t.h - 6, (t.w+6)/2, 0, Math.PI*2);
+  ctx.fill();
+}
+
+function drawHUD() {
+  ctx.fillStyle = 'rgba(255,255,255,0.82)';
+  ctx.beginPath(); ctx.roundRect(10, 10, 110, 34, 17); ctx.fill();
+  ctx.fillStyle = '#555'; ctx.font = 'bold 16px Segoe UI';
+  ctx.textAlign = 'left'; ctx.fillText('점수: ' + score, 24, 32);
+
+  ctx.beginPath(); ctx.roundRect(W-120, 10, 110, 34, 17); ctx.fill();
+  ctx.textAlign = 'right'; ctx.fillText('속도: ' + Math.round((speed-2)*10)/10, W-20, 32);
+}
+
+function initState() {
+  cat = { y: GROUND - CAT_H, vy: 0, onGround: true };
+  obstacles = [];
+  score = 0;
+  speed = 4;
+  frame = 0;
+  spawnTimer = 60; // 첫 장애물까지 대기 프레임
+}
+
+function jump() {
+  if (!running) return;
+  if (cat.onGround) {
+    cat.vy = -13.5;
+    cat.onGround = false;
+  }
+}
+
+function startGame() {
+  overlay.style.display = 'none';
+  running = true;
+  initState();
+  if (raf) cancelAnimationFrame(raf);
+  loop();
+}
+
+function showGameOver() {
+  running = false;
+  overlay.style.display = 'flex';
+  overlay.innerHTML = `
+    <h1>💥 게임 오버!</h1>
+    <p>최종 점수</p>
+    <div class="score-big">${score} 점</div>
+    <button onclick="startGame()">다시 하기 ↺</button>
+  `;
+}
+
+function loop() {
+  if (!running) return;
+  frame++;
+
+  // cat physics
+  cat.vy += 0.75;
+  cat.y += cat.vy;
+  if (cat.y >= GROUND - CAT_H) {
+    cat.y = GROUND - CAT_H;
+    cat.vy = 0;
+    cat.onGround = true;
+  }
+
+  // spawn
+  spawnTimer--;
+  if (spawnTimer <= 0) {
+    const typeIdx = Math.floor(Math.random() * OB_TYPES.length);
+    obstacles.push({ x: W + 10, t: OB_TYPES[typeIdx], passed: false });
+    const gap = Math.max(90, 180 - score * 3);
+    spawnTimer = Math.round(gap / speed * 60 / 60) + Math.floor(Math.random() * 20);
+    spawnTimer = Math.max(40, Math.round((Math.random() * 60 + 80) / speed));
+  }
+
+  // move obstacles & score
+  for (let i = obstacles.length - 1; i >= 0; i--) {
+    obstacles[i].x -= speed;
+    if (!obstacles[i].passed && obstacles[i].x + obstacles[i].t.w < CAT_X) {
+      obstacles[i].passed = true;
+      score++;
+      if (score % 5 === 0) speed = Math.min(4 + score * 0.18, 10);
+    }
+    if (obstacles[i].x + obstacles[i].t.w < 0) obstacles.splice(i, 1);
+  }
+
+  // collision (with margin)
+  const m = 6;
+  const cx1 = CAT_X + m, cy1 = cat.y + m, cw = CAT_W - m*2, ch = CAT_H - m*2;
+  for (const ob of obstacles) {
+    if (cx1 < ob.x + ob.t.w && cx1 + cw > ob.x &&
+        cy1 + ch > GROUND - ob.t.h && cy1 < GROUND) {
+      render(); showGameOver(); return;
+    }
+  }
+
+  render();
+  raf = requestAnimationFrame(loop);
+}
+
+function render() {
+  drawBg();
+  obstacles.forEach(drawObstacle);
+  drawCat(CAT_X, cat.y, !cat.onGround);
+  drawHUD();
+}
+
+// 시작 화면 미리 그리기 (장애물 없이 배경만)
+(function initDraw() {
+  cat = { y: GROUND - CAT_H, vy: 0, onGround: true };
+  obstacles = [];
+  score = 0; speed = 4; frame = 0;
+  drawBg();
+  drawCat(CAT_X, cat.y, false);
+  drawHUD();
+})();
+
+// controls
+window.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.key === 'ArrowUp') { e.preventDefault(); jump(); }
+});
+canvas.addEventListener('click', jump);
+canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(); }, { passive: false });
+</script>
+</body>
+</html>
